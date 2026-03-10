@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="theme-color" content="#f59e0b"/>
+<title>Birthday Perks</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{margin:0;padding:0;background:#fafafa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+  select,input,button{font-family:inherit;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const PERKS_KEY = "bpt-perks-v1";
+const USERS_KEY = "bpt-users-v1";
+const userClaimedKey = (uid) => `bpt-claimed-${uid}`;
+const userEnrolledKey = (uid) => `bpt-enrolled-${uid}`;
+
+const store = {
+  get: (k) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del: (k) => { try { localStorage.removeItem(k); } catch {} },
+};
+
+const CATEGORIES = ["Food & Drink","Retail","Beauty","Entertainment","Travel","Health","Other"];
+const VALIDITY_OPTIONS = ["Day of birthday only","Week of birthday","Entire birth month","2 weeks prior","Custom / Unknown"];
+const catColors = {
+  "Food & Drink":"#f97316","Retail":"#8b5cf6","Beauty":"#ec4899",
+  "Entertainment":"#3b82f6","Travel":"#06b6d4","Health":"#10b981","Other":"#6b7280",
+};
+const AVATAR_COLORS = ["#f59e0b","#ec4899","#8b5cf6","#3b82f6","#10b981","#f97316","#06b6d4","#e11d48"];
+
+const DEFAULT_PERKS = [
+  {id:1,name:"Starbucks",category:"Food & Drink",perk:"Free drink of your choice",notes:"Must be a Rewards member",howToRedeem:"Reward appears automatically in app on your birthday",url:"starbucks.com",validity:"Day of birthday only"},
+  {id:2,name:"Sephora",category:"Beauty",perk:"Free birthday gift (Beauty Insider)",notes:"Select in-store or online",howToRedeem:"Add to cart online or request at checkout in store",url:"sephora.com",validity:"Entire birth month"},
+  {id:3,name:"Denny's",category:"Food & Drink",perk:"Free Grand Slam breakfast",notes:"Show valid ID",howToRedeem:"Walk in on your birthday and show ID",url:"dennys.com",validity:"Day of birthday only"},
+  {id:4,name:"IHOP",category:"Food & Drink",perk:"Free stack of pancakes",notes:"Must join MyHOP rewards",howToRedeem:"Show reward in app to server",url:"ihop.com",validity:"Day of birthday only"},
+  {id:5,name:"Baskin-Robbins",category:"Food & Drink",perk:"Free ice cream scoop",notes:"Join Birthday Club",howToRedeem:"Show confirmation email in store",url:"baskinrobbins.com",validity:"Day of birthday only"},
+  {id:6,name:"Ulta Beauty",category:"Beauty",perk:"Birthday gift with purchase",notes:"Ultamate Rewards members",howToRedeem:"Add to cart or request in store during birth month",url:"ulta.com",validity:"Entire birth month"},
+  {id:7,name:"Panera Bread",category:"Food & Drink",perk:"Free pastry or bakery item",notes:"MyPanera+ members",howToRedeem:"Reward loaded to app automatically",url:"panerabread.com",validity:"Day of birthday only"},
+  {id:8,name:"Krispy Kreme",category:"Food & Drink",perk:"Free doughnut of your choice",notes:"Rewards members only",howToRedeem:"Show app or mention birthday at counter",url:"krispykreme.com",validity:"Day of birthday only"},
+];
+
+function getDaysUntil(mmdd) {
+  if (!mmdd) return null;
+  const [m,d] = mmdd.split("-").map(Number);
+  const now = new Date(); now.setHours(0,0,0,0);
+  let t = new Date(now.getFullYear(),m-1,d);
+  if (t < now) t = new Date(now.getFullYear()+1,m-1,d);
+  return Math.ceil((t-now)/86400000);
+}
+function isBdayMonth(mmdd) {
+  if (!mmdd) return false;
+  return new Date().getMonth()+1 === parseInt(mmdd.split("-")[0]);
+}
+function initials(name) {
+  return name.trim().split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+}
+
+const inp = {width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #d1d5db",fontSize:15,boxSizing:"border-box",marginBottom:12,background:"#fff"};
+const lbl = {fontWeight:600,fontSize:13,color:"#374151",display:"block",marginBottom:4};
+
+function Modal({title,onClose,children}) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"flex-end",zIndex:1000}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:"20px 16px 36px",width:"100%",maxHeight:"92vh",overflowY:"auto",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <span style={{fontWeight:700,fontSize:18}}>{title}</span>
+          <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:"50%",width:32,height:32,cursor:"pointer",fontSize:18}}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function PerkForm({initial,onSave,onCancel}) {
+  const blank = {name:"",category:"Food & Drink",perk:"",notes:"",howToRedeem:"",url:"",validity:"Entire birth month"};
+  const [form,setForm] = useState(initial ? {...blank,...initial} : blank);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  const valid = form.name.trim() && form.perk.trim();
+  return (
+    <div>
+      <label style={lbl}>Company / Website Name *</label>
+      <input style={inp} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Starbucks"/>
+      <label style={lbl}>Category *</label>
+      <select style={inp} value={form.category} onChange={e=>set("category",e.target.value)}>
+        {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+      </select>
+      <label style={lbl}>Birthday Perk / Gift *</label>
+      <input style={inp} value={form.perk} onChange={e=>set("perk",e.target.value)} placeholder="e.g. Free drink of your choice"/>
+      <label style={lbl}>Valid Window</label>
+      <select style={inp} value={form.validity} onChange={e=>set("validity",e.target.value)}>
+        {VALIDITY_OPTIONS.map(v=><option key={v}>{v}</option>)}
+      </select>
+      <label style={lbl}>How to Redeem</label>
+      <input style={inp} value={form.howToRedeem} onChange={e=>set("howToRedeem",e.target.value)} placeholder="e.g. Show app reward at checkout"/>
+      <label style={lbl}>Notes</label>
+      <input style={inp} value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="e.g. Sign up 30 days in advance"/>
+      <label style={lbl}>Website / App URL</label>
+      <input style={inp} value={form.url} onChange={e=>set("url",e.target.value)} placeholder="e.g. starbucks.com"/>
+      <div style={{display:"flex",gap:10,marginTop:4}}>
+        <button onClick={onCancel} style={{flex:1,padding:12,borderRadius:10,border:"1px solid #d1d5db",background:"#f9fafb",fontWeight:600,cursor:"pointer"}}>Cancel</button>
+        <button onClick={()=>valid&&onSave(form)} style={{flex:2,padding:12,borderRadius:10,border:"none",background:valid?"#f59e0b":"#d1d5db",color:valid?"#fff":"#9ca3af",fontWeight:700,cursor:"pointer",fontSize:15}}>
+          {initial?.id ? "Save Changes" : "Add Perk"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PerkCard({perk,claimed,enrolled,onToggleClaim,onToggleEnroll,onEdit,onDelete}) {
+  const [expanded,setExpanded] = useState(false);
+  const color = catColors[perk.category]||"#6b7280";
+  return (
+    <div style={{background:claimed?"#f9fafb":"#fff",border:`1px solid ${claimed?"#d1d5db":"#e5e7eb"}`,borderLeft:`4px solid ${color}`,borderRadius:12,marginBottom:10,opacity:claimed?0.75:1}}>
+      <div style={{padding:"12px 14px 0",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:6}}>
+              <span style={{fontWeight:700,fontSize:16}}>{perk.name}</span>
+              <span style={{background:color+"22",color,fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{perk.category}</span>
+              {!enrolled&&<span style={{background:"#fef9c3",color:"#92400e",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>⚠ Not enrolled</span>}
+              {claimed&&<span style={{background:"#dcfce7",color:"#16a34a",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>✓ Claimed</span>}
+            </div>
+            <div style={{color:"#374151",fontSize:14,marginTop:4}}>🎁 {perk.perk}</div>
+            <div style={{color:"#9ca3af",fontSize:12,marginTop:2}}>⏱ {perk.validity||"Unknown window"}</div>
+          </div>
+          <span style={{color:"#9ca3af",fontSize:16,paddingLeft:8}}>{expanded?"▲":"▼"}</span>
+        </div>
+      </div>
+      {expanded&&(
+        <div style={{padding:"10px 14px 4px",borderTop:"1px solid #f3f4f6",marginTop:10}}>
+          {perk.howToRedeem&&<div style={{fontSize:13,color:"#374151",marginBottom:6}}>📋 <strong>How to redeem:</strong> {perk.howToRedeem}</div>}
+          {perk.notes&&<div style={{fontSize:13,color:"#6b7280",marginBottom:6}}>📝 <strong>Notes:</strong> {perk.notes}</div>}
+          {perk.url&&<div style={{fontSize:13,marginBottom:6}}>🔗 <a href={`https://${perk.url.replace(/^https?:\/\//,"")}`} target="_blank" rel="noreferrer" style={{color:"#3b82f6"}}>{perk.url}</a></div>}
+        </div>
+      )}
+      <div style={{display:"flex",gap:8,padding:"10px 14px 12px"}}>
+        <button onClick={()=>onToggleEnroll(perk.id)} style={{flex:1,padding:"6px 0",borderRadius:8,border:"none",cursor:"pointer",background:enrolled?"#dcfce7":"#fef9c3",color:enrolled?"#15803d":"#92400e",fontWeight:600,fontSize:12}}>
+          {enrolled?"✓ Enrolled":"+ Enroll"}
+        </button>
+        <button onClick={()=>onToggleClaim(perk.id)} style={{flex:1,padding:"6px 0",borderRadius:8,border:"none",cursor:"pointer",background:claimed?"#fee2e2":"#ede9fe",color:claimed?"#dc2626":"#7c3aed",fontWeight:600,fontSize:12}}>
+          {claimed?"↩ Unclaim":"🎉 Claim"}
+        </button>
+        <button onClick={()=>onEdit(perk)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontSize:13}}>✏️</button>
+        <button onClick={()=>onDelete(perk.id)} style={{padding:"6px 10px",borderRadius:8,border:"none",background:"#fee2e2",color:"#dc2626",cursor:"pointer",fontSize:13}}>🗑</button>
+      </div>
+    </div>
+  );
+}
+
+function EditUserForm({user,onSave,onCancel,onReset}) {
+  const [name,setName] = useState(user.name);
+  const [birthday,setBirthday] = useState(user.birthday||"");
+  const [colorIdx,setColorIdx] = useState(user.colorIdx??0);
+  return (
+    <div>
+      <label style={lbl}>Name</label>
+      <input style={inp} value={name} onChange={e=>setName(e.target.value)}/>
+      <label style={lbl}>Birthday</label>
+      <input type="date" style={inp} value={birthday?`2000-${birthday}`:""}
+        onChange={e=>setBirthday(e.target.value?e.target.value.slice(5):"")}/>
+      <label style={lbl}>Profile Color</label>
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        {AVATAR_COLORS.map((c,i)=>(
+          <div key={i} onClick={()=>setColorIdx(i)} style={{width:32,height:32,borderRadius:"50%",background:c,cursor:"pointer",border:colorIdx===i?"3px solid #1f2937":"3px solid transparent"}}/>
+        ))}
+      </div>
+      <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:14,color:"#9a3412",marginBottom:6}}>🔄 Reset Birthday Year</div>
+        <p style={{fontSize:13,color:"#7c2d12",margin:"0 0 10px"}}>Clears all your claimed statuses for a fresh new birthday year.</p>
+        <button onClick={onReset} style={{width:"100%",padding:"10px 0",borderRadius:8,border:"none",background:"#f97316",color:"#fff",fontWeight:700,cursor:"pointer"}}>Reset My Claimed Statuses</button>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={onCancel} style={{flex:1,padding:12,borderRadius:10,border:"1px solid #d1d5db",background:"#f9fafb",fontWeight:600,cursor:"pointer"}}>Cancel</button>
+        <button onClick={()=>name.trim()&&onSave({...user,name:name.trim(),birthday,colorIdx})} style={{flex:2,padding:12,borderRadius:10,border:"none",background:name.trim()?"#f59e0b":"#d1d5db",color:name.trim()?"#fff":"#9ca3af",fontWeight:700,cursor:"pointer",fontSize:15}}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+function UserScreen({users,onSelect,onAdd,onDeleteUser}) {
+  const [adding,setAdding] = useState(false);
+  const [name,setName] = useState("");
+  const [birthday,setBirthday] = useState("");
+  const [colorIdx,setColorIdx] = useState(0);
+  const handleAdd = () => {
+    if (!name.trim()) return;
+    const mmdd = birthday?birthday.slice(5):"";
+    onAdd({id:Date.now().toString(),name:name.trim(),birthday:mmdd,colorIdx});
+    setAdding(false);setName("");setBirthday("");setColorIdx(0);
+  };
+  return (
+    <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",background:"#fafafa",minHeight:"100vh",maxWidth:480,margin:"0 auto"}}>
+      <div style={{background:"linear-gradient(135deg,#f59e0b,#ec4899)",padding:"48px 20px 28px",textAlign:"center",color:"#fff"}}>
+        <div style={{fontSize:52}}>🎂</div>
+        <div style={{fontSize:26,fontWeight:800,marginTop:8}}>Birthday Perks</div>
+        <div style={{fontSize:14,opacity:0.9,marginTop:4}}>Who's celebrating?</div>
+      </div>
+      <div style={{padding:"20px 16px"}}>
+        {users.length===0&&!adding&&<p style={{textAlign:"center",color:"#9ca3af",marginBottom:16}}>No profiles yet. Add one to get started!</p>}
+        {users.map(u=>{
+          const days=getDaysUntil(u.birthday);
+          const bdMonth=isBdayMonth(u.birthday);
+          return (
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:14,background:"#fff",borderRadius:14,padding:"14px",marginBottom:10,border:bdMonth?"2px solid #f59e0b":"1px solid #e5e7eb",cursor:"pointer"}} onClick={()=>onSelect(u)}>
+              <div style={{width:48,height:48,borderRadius:"50%",background:AVATAR_COLORS[u.colorIdx??0],display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:18,flexShrink:0}}>{initials(u.name)}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:17}}>{u.name}</div>
+                <div style={{fontSize:13,color:"#6b7280"}}>
+                  {u.birthday?(days===0?"🎉 Happy Birthday!":bdMonth?"🎂 It's your birthday month!":`🎁 Birthday in ${days} day${days!==1?"s":""}`):"Birthday not set"}
+                </div>
+              </div>
+              {bdMonth&&<span style={{fontSize:20}}>🎉</span>}
+              <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete ${u.name}'s profile?`))onDeleteUser(u.id);}} style={{background:"#fee2e2",border:"none",borderRadius:8,padding:"6px 8px",cursor:"pointer",color:"#dc2626",fontSize:13}}>🗑</button>
+            </div>
+          );
+        })}
+        {adding?(
+          <div style={{background:"#fff",borderRadius:14,padding:16,border:"1px solid #e5e7eb",marginBottom:10}}>
+            <label style={lbl}>Name *</label>
+            <input style={inp} value={name} onChange={e=>setName(e.target.value)} placeholder="Enter your name" autoFocus/>
+            <label style={lbl}>Birthday</label>
+            <input type="date" style={inp} value={birthday?`2000-${birthday}`:""} onChange={e=>setBirthday(e.target.value?e.target.value.slice(5):"")}/>
+            <label style={lbl}>Profile Color</label>
+            <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+              {AVATAR_COLORS.map((c,i)=>(
+                <div key={i} onClick={()=>setColorIdx(i)} style={{width:32,height:32,borderRadius:"50%",background:c,cursor:"pointer",border:colorIdx===i?"3px solid #1f2937":"3px solid transparent"}}/>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setAdding(false)} style={{flex:1,padding:11,borderRadius:10,border:"1px solid #d1d5db",background:"#f9fafb",fontWeight:600,cursor:"pointer"}}>Cancel</button>
+              <button onClick={handleAdd} style={{flex:2,padding:11,borderRadius:10,border:"none",background:name.trim()?"#f59e0b":"#d1d5db",color:name.trim()?"#fff":"#9ca3af",fontWeight:700,cursor:"pointer",fontSize:15}}>Create Profile</button>
+            </div>
+          </div>
+        ):(
+          <button onClick={()=>setAdding(true)} style={{width:"100%",padding:14,borderRadius:14,border:"2px dashed #d1d5db",background:"#f9fafb",color:"#6b7280",fontWeight:600,fontSize:15,cursor:"pointer"}}>
+            + Add New Person
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [users,setUsers] = useState(()=>store.get(USERS_KEY)||[]);
+  const [perks,setPerks] = useState(()=>store.get(PERKS_KEY)||DEFAULT_PERKS);
+  const [activeUser,setActiveUser] = useState(null);
+  const [claimed,setClaimed] = useState({});
+  const [enrolled,setEnrolled] = useState({});
+  const [filter,setFilter] = useState("All");
+  const [showClaimed,setShowClaimed] = useState(true);
+  const [showEnrolledOnly,setShowEnrolledOnly] = useState(false);
+  const [search,setSearch] = useState("");
+  const [showAdd,setShowAdd] = useState(false);
+  const [editPerk,setEditPerk] = useState(null);
+  const [editUser,setEditUser] = useState(false);
+
+  useEffect(()=>store.set(USERS_KEY,users),[users]);
+  useEffect(()=>store.set(PERKS_KEY,perks),[perks]);
+
+  const selectUser = (u) => {
+    setActiveUser(u);
+    setClaimed(store.get(userClaimedKey(u.id))||{});
+    setEnrolled(store.get(userEnrolledKey(u.id))||{});
+  };
+
+  const saveClaimed = (next) => { setClaimed(next); store.set(userClaimedKey(activeUser.id),next); };
+  const saveEnrolled = (next) => { setEnrolled(next); store.set(userEnrolledKey(activeUser.id),next); };
+  const toggleClaim = (pid) => saveClaimed({...claimed,[pid]:!claimed[pid]});
+  const toggleEnroll = (pid) => saveEnrolled({...enrolled,[pid]:!enrolled[pid]});
+
+  const addUser = (u) => { setUsers(us=>[...us,u]); selectUser(u); };
+  const deleteUser = (uid) => { setUsers(us=>us.filter(u=>u.id!==uid)); store.del(userClaimedKey(uid)); store.del(userEnrolledKey(uid)); };
+  const updateUser = (u) => { setUsers(us=>us.map(x=>x.id===u.id?u:x)); setActiveUser(u); setEditUser(false); };
+  const resetClaimed = () => saveClaimed({});
+
+  const savePerk = (p) => {
+    if (p.id) setPerks(ps=>ps.map(x=>x.id===p.id?p:x));
+    else setPerks(ps=>[...ps,{...p,id:Date.now()}]);
+    setShowAdd(false); setEditPerk(null);
+  };
+  const deletePerk = (id) => setPerks(ps=>ps.filter(p=>p.id!==id));
+
+  if (!activeUser) return <UserScreen users={users} onSelect={selectUser} onAdd={addUser} onDeleteUser={deleteUser}/>;
+
+  const days = getDaysUntil(activeUser.birthday);
+  const bdMonth = isBdayMonth(activeUser.birthday);
+  const unclaimedCount = perks.filter(p=>!claimed[p.id]).length;
+  const enrolledCount = perks.filter(p=>enrolled[p.id]).length;
+
+  const visible = perks.filter(p=>{
+    if (!showClaimed&&claimed[p.id]) return false;
+    if (showEnrolledOnly&&!enrolled[p.id]) return false;
+    if (filter!=="All"&&p.category!==filter) return false;
+    if (search&&!p.name.toLowerCase().includes(search.toLowerCase())&&!p.perk.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }).sort((a,b)=>{
+    if (!!claimed[a.id]!==!!claimed[b.id]) return claimed[a.id]?1:-1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return (
+    <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",background:"#fafafa",minHeight:"100vh",maxWidth:480,margin:"0 auto"}}>
+      <div style={{background:bdMonth?"linear-gradient(135deg,#f59e0b,#ec4899)":"linear-gradient(135deg,#6b7280,#374151)",padding:"20px 16px 14px",color:"#fff"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+          <button onClick={()=>setActiveUser(null)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:8,padding:"6px 10px",color:"#fff",fontWeight:700,cursor:"pointer",fontSize:13}}>← Users</button>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:18}}>🎂 {activeUser.name}</div>
+            <div style={{fontSize:12,opacity:0.9}}>
+              {activeUser.birthday?(days===0?"🎉 Happy Birthday!":bdMonth?"🎂 It's your birthday month!":`🎁 Birthday in ${days} day${days!==1?"s":""}`):"Set your birthday in profile"}
+            </div>
+          </div>
+          <button onClick={()=>setEditUser(true)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:8,padding:"6px 10px",color:"#fff",fontWeight:700,cursor:"pointer",fontSize:13}}>⚙️</button>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          {[{label:"Enrolled",val:enrolledCount},{label:"Unclaimed",val:unclaimedCount},{label:"Total",val:perks.length}].map(s=>(
+            <div key={s.label} style={{flex:1,background:"rgba(255,255,255,0.2)",borderRadius:10,padding:"8px 0",textAlign:"center"}}>
+              <div style={{fontWeight:800,fontSize:20}}>{s.val}</div>
+              <div style={{fontSize:11,opacity:0.85}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍  Search perks…"
+          style={{width:"100%",padding:"10px 14px",borderRadius:10,border:"none",fontSize:15,boxSizing:"border-box",background:"rgba(255,255,255,0.92)"}}/>
+      </div>
+
+      <div style={{display:"flex",gap:8,padding:"12px 16px 4px",overflowX:"auto",scrollbarWidth:"none"}}>
+        {["All",...CATEGORIES].map(c=>(
+          <button key={c} onClick={()=>setFilter(c)} style={{whiteSpace:"nowrap",padding:"6px 14px",borderRadius:20,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:filter===c?"#f59e0b":"#e5e7eb",color:filter===c?"#fff":"#374151"}}>{c}</button>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:8,padding:"8px 16px 4px"}}>
+        <button onClick={()=>setShowClaimed(v=>!v)} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #d1d5db",background:showClaimed?"#f0fdf4":"#f9fafb",color:showClaimed?"#16a34a":"#6b7280",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          {showClaimed?"✓ Showing claimed":"○ Hiding claimed"}
+        </button>
+        <button onClick={()=>setShowEnrolledOnly(v=>!v)} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #d1d5db",background:showEnrolledOnly?"#ede9fe":"#f9fafb",color:showEnrolledOnly?"#7c3aed":"#6b7280",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          {showEnrolledOnly?"★ Enrolled only":"★ All"}
+        </button>
+        <span style={{color:"#9ca3af",fontSize:12,alignSelf:"center",marginLeft:"auto"}}>{visible.length} result{visible.length!==1?"s":""}</span>
+      </div>
+
+      <div style={{padding:"8px 16px 100px"}}>
+        {visible.length===0?(
+          <div style={{textAlign:"center",color:"#9ca3af",marginTop:40,fontSize:15}}>No perks found.<br/><span style={{fontSize:13}}>Tap + to add one!</span></div>
+        ):visible.map(p=>(
+          <PerkCard key={p.id} perk={p} claimed={!!claimed[p.id]} enrolled={!!enrolled[p.id]}
+            onToggleClaim={toggleClaim} onToggleEnroll={toggleEnroll}
+            onEdit={setEditPerk} onDelete={deletePerk}/>
+        ))}
+      </div>
+
+      <button onClick={()=>setShowAdd(true)} style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",border:"none",background:"linear-gradient(135deg,#f59e0b,#ec4899)",color:"#fff",fontSize:28,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,0,0,0.2)",display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+
+      {showAdd&&<Modal title="Add Birthday Perk" onClose={()=>setShowAdd(false)}><PerkForm onSave={savePerk} onCancel={()=>setShowAdd(false)}/></Modal>}
+      {editPerk&&<Modal title="Edit Perk" onClose={()=>setEditPerk(null)}><PerkForm initial={editPerk} onSave={savePerk} onCancel={()=>setEditPerk(null)}/></Modal>}
+      {editUser&&<Modal title="Edit Profile" onClose={()=>setEditUser(false)}><EditUserForm user={activeUser} onSave={updateUser} onCancel={()=>setEditUser(false)} onReset={resetClaimed}/></Modal>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
